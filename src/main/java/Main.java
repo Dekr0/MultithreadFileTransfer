@@ -11,6 +11,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 /**
     Area to research :
         Multithreading
@@ -27,26 +30,27 @@ import java.util.regex.Pattern;
 public class Main {
 
     private static final int MAX_AVAILABLE = 3;
-    private static String Filename;
-    private static String URLPath;
-    private static long Size = -1;
+    private static final Logger logger = LogManager.getLogger(Main.class);
+    private static String filename;
+    private static String urlPath;
+    private static long downloadSize = -1;
 
 
     public static void main(String[] args) {
-        URLPath = args[0];
+        urlPath = args[0];
 
-        Size = getFileSize();
-        if (Size <= 0) {
-            Size = getFileSizeHeader();
+        downloadSize = getFileSize();
+        if (downloadSize <= 0) {
+            downloadSize = getFileSizeHeader();
         }
 
-        if (Size <= 0) return;
+        if (downloadSize <= 0) return;
 
-        Filename = getFileName();
+        filename = getFileName();
 
-        DownloadThread.Filename = Filename;
-        DownloadThread.URLPath = URLPath;
-        DownloadThread.TotalFileSize = Size;
+        DownloadThread.filename = filename;
+        DownloadThread.urlPath = urlPath;
+        DownloadThread.totalFileSize = downloadSize;
 
         startDownload();
     }
@@ -58,28 +62,18 @@ public class Main {
      * @throws IOException
      */
     public static void createDownloadFile() throws IOException {
-        RandomAccessFile downloadFile = new RandomAccessFile(new File(Filename), "rw");
+        RandomAccessFile downloadFile = new RandomAccessFile(new File(filename), "rw");
 
-        downloadFile.setLength(Size);
+        downloadFile.setLength(downloadSize);
         downloadFile.close();
     }
 
 
     public static void deleteDownloadFile() {
-        File downloadFile = new File(Filename);
+        File downloadFile = new File(filename);
         if (!downloadFile.delete()) {
             System.out.println("Failed to delete file");
         }
-    }
-
-
-    public static void debug(Object obj) {
-        System.out.println(obj);
-    }
-
-
-    public static void error(Object obj) {
-        System.err.println(obj);
     }
 
 
@@ -87,7 +81,7 @@ public class Main {
         String filename = "out";
 
         try {
-            URL url = new URL(URLPath);
+            URL url = new URL(urlPath);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
             conn.setRequestMethod("HEAD");
@@ -110,7 +104,7 @@ public class Main {
                 }
             }
         } catch (IOException ioException) {
-            error(ioException.getMessage());
+            logger.error(ioException.getMessage());
         }
 
         return filename;
@@ -125,7 +119,7 @@ public class Main {
         long size = -1;
 
         try {
-            URL url = new URL(URLPath);
+            URL url = new URL(urlPath);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
 
@@ -134,7 +128,7 @@ public class Main {
 
             size = conn.getContentLengthLong();
         } catch (IOException ioException) {
-            error(ioException.getMessage());
+            logger.error(ioException.getMessage());
         }
 
         return size;
@@ -150,7 +144,7 @@ public class Main {
         long size = -1;
 
         try {
-            URL url = new URL(URLPath);
+            URL url = new URL(urlPath);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
             conn.setRequestMethod("HEAD");
@@ -163,7 +157,7 @@ public class Main {
                 size = Long.parseLong(fieldValue);
             }
         } catch (IOException ioException) {
-            error(ioException.getMessage());
+            logger.error(ioException.getMessage());
         }
 
         return size;
@@ -206,7 +200,7 @@ public class Main {
 
     public static void startDownload() {
         int threadCount = DownloadThreadManager.MAX_THREAD_COUNT;
-        long rangeSize = Size / threadCount;
+        long rangeSize = downloadSize / threadCount;
         long start = 0, end = 0;
 
         CountDownLatch doneSignal = new CountDownLatch(threadCount);
@@ -217,14 +211,14 @@ public class Main {
         try {
             createDownloadFile();
         } catch (IOException ioException) {
-            error(ioException.getMessage());
+            logger.error(ioException.getMessage());
             return;
         }
 
         for (int i = 0; i < threadCount; ++i) {
-            if (Size < end + rangeSize ||
-                    (end + rangeSize < Size && i == threadCount - 1)) {
-                threadPool.submit(new DownloadThread(doneSignal, i, start, Size, sem));
+            if (downloadSize < end + rangeSize ||
+                    (end + rangeSize < downloadSize && i == threadCount - 1)) {
+                threadPool.submit(new DownloadThread(doneSignal, i, start, downloadSize, sem));
                 break;
             }
 
@@ -236,12 +230,12 @@ public class Main {
         try {
             doneSignal.await();
         } catch (InterruptedException exception) {
-
+            logger.error(exception.getMessage());
         }
 
         threadPool.shutdown();
 
-        if (DownloadThread.Error) {
+        if (DownloadThread.processError) {
             deleteDownloadFile();
         }
     }

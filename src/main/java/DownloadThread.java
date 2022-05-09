@@ -1,5 +1,9 @@
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -11,15 +15,16 @@ import java.util.concurrent.Semaphore;
 
 public class DownloadThread implements Runnable {
 
-    static public String Filename;
-    static public String URLPath;
-    static public long TotalFileSize;
-    static public boolean Error = false;
+    static public String filename;
+    static public String urlPath;
+    static public long totalFileSize;
+    static public boolean processError = false;
 
     private final int id;
     private final long start;
     private final long end;
     private final CountDownLatch doneSignal;
+    private final Logger logger;
     private final Semaphore sem;
 
     public DownloadThread(CountDownLatch doneSignal, int id, long start, long end, Semaphore sem) {
@@ -27,61 +32,78 @@ public class DownloadThread implements Runnable {
         this.start = start;
         this.end = end;
         this.doneSignal = doneSignal;
+        this.logger = LogManager.getLogger();
         this.sem = sem;
     }
 
 
     public void run() {
         try {
-            String msg;
-
-            URL url = new URL(URLPath);
+            URL url = new URL(urlPath);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
             int code = -1;
             while (code != 206) {
                 // send GET request and retrieve the bytes from "start" to "end" of the file
 
-                conn.setRequestMethod("GET");
-                conn.setConnectTimeout(5000);
-                conn.setRequestProperty("Range", String.format("bytes=%d-%d", start, end));
-
-                code = conn.getResponseCode();
-
-                msg = String.format("Thread %d: Response code - %d", id, code);
-                System.out.println(msg);
+                sem.acquire();
+                code = get(conn);
+                sem.release();
 
                 Thread.sleep(1000);
             }
 
-            long length = conn.getContentLengthLong();
-            msg = String.format("Thread %d: Content length = %d, %d byte ~ %d byte",
-                    id, length, start, end);
-            System.out.println(msg);
-
-            ReadableByteChannel downloadChannel = Channels.newChannel(conn.getInputStream());
-
-            RandomAccessFile downloadFile = new RandomAccessFile(new File(Filename), "rw");
-            FileChannel writeChannel = downloadFile.getChannel();
-
-            writeChannel.transferFrom(downloadChannel, start, end - start);
-
-            downloadChannel.close();
-            downloadFile.close();
-            writeChannel.close();
-
-        } catch (IOException ioException) {
-            System.err.println(ioException);
-            Error = true;
-        } catch (InterruptedException interrException) {
-            System.out.println(interrException);
-            Error = true;
-        } catch (Exception e) {
-            System.out.println(id + e.toString());
-            Error = true;
-        } finally {
-            doneSignal.countDown();
+            processError = download(conn);
+        } catch (IOException | InterruptedException exception) {
+            logger.error(exception.getMessage());
+            processError = true;
         }
+
+        doneSignal.countDown();
     }
 
+    private int get(HttpURLConnection conn) {
+        int code = -1;
+
+        try {
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5000);
+            conn.setRequestProperty("Range", String.format("bytes=%d-%d", start, end));
+
+            code = conn.getResponseCode();
+
+            logger.debug(String.format("Thread %d: Response code - %d", id, code));
+
+        } catch (IOException exception) {
+            logger.error(exception.getMessage());
+        }
+            
+        return code;
+    }
+
+    private boolean download(HttpURLConnection conn) {
+        boolean error = false;
+
+        long length = conn.getContentLengthLong();
+
+        logger.debug(String.format("Thread %d: Content length = %d, %d byte ~ %d byte",
+                id, length, start, end));
+
+        try (InputStream in = conn.getInputStream()) {
+            try (RandomAccessFile downloadFile = new RandomAccessFile(new File(filename), "rw")) {
+                ReadableByteChannel downloadChannel = Channels.newChannel(in);
+                FileChannel writeChannel = downloadFile.getChannel();
+
+                writeChannel.transferFrom(downloadChannel, start, end - start);
+
+                downloadChannel.close();
+                writeChannel.close();
+            }
+        } catch (IOException ioException) {
+            logger.error(ioException.getMessage());
+            error = true;
+        }
+
+        return error;
+    }
 }
